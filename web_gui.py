@@ -478,6 +478,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .tag-todo { color: #A33333; background: #FAECEC; }
   .tag-off { color: #6A7683; background: #EEF1F4; }
   .dim { color: var(--ink-3); font-size: 12.5px; padding: 4px 6px; }
+  .f-note { color: var(--ink-3); font-size: 12px; font-weight: 600; }
   input[type=range] { width: 100%; margin-top: 6px; accent-color: var(--blue); }
   input[type=range]:disabled { cursor: not-allowed; }
 
@@ -570,7 +571,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <div class="p-body">
         <div class="field"><span class="f-label" id="paramLabel">正确率(100 或 70,100):</span>
           <input type="text" id="param"></div>
-        <div class="field" id="realtimeField"><label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked>按真实时间刷(每章占满目标秒数;取消勾选=并发立即刷完)</label></div>
+        <div class="field" id="realtimeField"><label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked>按真实时间刷(每章占满目标秒数;取消勾选=并发立即刷完)<span class="f-note" id="realtimeHint"></span></label></div>
         <div class="field" id="jitterField"><span class="f-label">随机性 <b id="jitterVal">20%</b> (每章时长在 ±该比例内浮动,0 = 完全规律):</span>
           <input type="range" id="jitter" class="range" min="0" max="100" step="5" value="20"></div>
       </div>
@@ -626,14 +627,15 @@ function setModeLabel() {
   updateJitterVisibility();
 }
 
-/* 真实时间勾选框与随机性滑条只在刷时长模式出现;关掉真实时间时滑条置灰 */
+/* 始终可见:只有「刷学习时长」模式可改,正确率模式下禁用并淡化,免得以为没有这项 */
 function updateJitterVisibility() {
   var on = getMode() === 'time';
   var rt = $('realtime').checked;
-  $('realtimeField').style.display = on ? '' : 'none';
-  $('jitterField').style.display = on ? '' : 'none';
-  $('jitter').disabled = !rt;
-  $('jitterField').style.opacity = rt ? '' : '0.45';
+  $('realtime').disabled = !on;
+  $('jitter').disabled = !on || !rt;
+  $('realtimeField').style.opacity = on ? '' : '0.55';
+  $('jitterField').style.opacity = (on && rt) ? '' : '0.55';
+  $('realtimeHint').textContent = on ? '' : '  ← 切到「刷学习时长」才生效';
 }
 
 function selectMode(mode) {
