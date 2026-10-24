@@ -294,6 +294,11 @@ def create_app():
             param = welearn_common.parse_numeric_param(str(payload.get("param", "")))
         except ValueError as e:
             return jsonify(ok=False, error=f"参数格式错误:{e}\n模式1: 100   模式2: 70,100"), 400
+        jitter = welearn_time.TimeTask.normalize_jitter(
+            payload.get("jitter", welearn_time.JITTER_DEFAULT))
+        raw_realtime = payload.get("realtime", True)
+        realtime = (raw_realtime if isinstance(raw_realtime, bool)
+                    else str(raw_realtime).strip().lower() not in ("0", "false", "no", "off", ""))
         desc = "全部单元" if all_units else "单元" + ",".join(str(u) for u in unit_list)
         if section_map:
             desc += " 小节" + ",".join(
@@ -301,7 +306,11 @@ def create_app():
 
         def work():
             try:
-                result = state.task.run(0 if all_units else unit_list, param, section_map)
+                if state.mode == "time":
+                    result = state.task.run(0 if all_units else unit_list, param,
+                                            section_map, jitter=jitter, realtime=realtime)
+                else:
+                    result = state.task.run(0 if all_units else unit_list, param, section_map)
             except Exception as e:
                 msg = repr(e)   # except 块结束会自动删除 e,先取值再使用
                 state._set(False, "待命")
@@ -321,7 +330,9 @@ def create_app():
             state.running = True
             state.running_what = "任务运行中"
             state.worker = threading.Thread(target=work, daemon=True)
-        state.log(f"开始任务:{desc} 参数={param}")
+        state.log(f"开始任务:{desc} 参数={param}" +
+                  (f" 真实时间={'开' if realtime else '关'} 随机性={jitter:.0f}%"
+                   if state.mode == "time" else ""))
         state.worker.start()
         return jsonify(ok=True)
 
@@ -467,6 +478,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .tag-todo { color: #A33333; background: #FAECEC; }
   .tag-off { color: #6A7683; background: #EEF1F4; }
   .dim { color: var(--ink-3); font-size: 12.5px; padding: 4px 6px; }
+  input[type=range] { width: 100%; margin-top: 6px; accent-color: var(--blue); }
+  input[type=range]:disabled { cursor: not-allowed; }
 
   /* 执行区:深色,呼应控制台 */
   .ops { background: var(--ops); border-color: var(--ops-line); color: var(--ops-ink); }
@@ -557,6 +570,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <div class="p-body">
         <div class="field"><span class="f-label" id="paramLabel">正确率(100 或 70,100):</span>
           <input type="text" id="param"></div>
+        <div class="field" id="realtimeField"><label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked>按真实时间刷(每章占满目标秒数;取消勾选=并发立即刷完)</label></div>
+        <div class="field" id="jitterField"><span class="f-label">随机性 <b id="jitterVal">20%</b> (每章时长在 ±该比例内浮动,0 = 完全规律):</span>
+          <input type="range" id="jitter" class="range" min="0" max="100" step="5" value="20"></div>
       </div>
     </section>
   </div>
@@ -607,6 +623,17 @@ function getMode() {
 function setModeLabel() {
   $('paramLabel').textContent = getMode() === 'time'
     ? '每练习时长秒(30 或 10,30):' : '正确率(100 或 70,100):';
+  updateJitterVisibility();
+}
+
+/* 真实时间勾选框与随机性滑条只在刷时长模式出现;关掉真实时间时滑条置灰 */
+function updateJitterVisibility() {
+  var on = getMode() === 'time';
+  var rt = $('realtime').checked;
+  $('realtimeField').style.display = on ? '' : 'none';
+  $('jitterField').style.display = on ? '' : 'none';
+  $('jitter').disabled = !rt;
+  $('jitterField').style.opacity = rt ? '' : '0.45';
 }
 
 function selectMode(mode) {
@@ -812,6 +839,11 @@ function updateSummary() {
   if (!el) return;
   var p = $('param').value.trim();
   var suffix = p ? '(参数 ' + p + ')' : '';
+  if (getMode() === 'time') {
+    suffix += $('realtime').checked
+      ? ' 真实时间刷 随机性 ' + $('jitter').value + '%'
+      : ' 立即刷完';
+  }
   if ($('allUnits').checked) {
     el.textContent = '全部单元' + suffix;
     return;
@@ -1015,6 +1047,15 @@ $('courseSel').addEventListener('change', function () {
 
 $('allUnits').addEventListener('change', applyAllUnits);
 $('param').addEventListener('input', updateSummary);
+$('jitter').addEventListener('input', function () {
+  $('jitterVal').textContent = $('jitter').value + '%';
+  updateSummary();
+});
+$('realtime').addEventListener('change', function () {
+  updateJitterVisibility();
+  updateSummary();
+});
+updateJitterVisibility();
 $('clearBtn').addEventListener('click', function () { $('log').innerHTML = ''; });
 
 $('startBtn').addEventListener('click', function () {
@@ -1025,7 +1066,9 @@ $('startBtn').addEventListener('click', function () {
   }
   var body = {units: sel.allUnits ? 0 : sel.units,
               sections: sel.allUnits ? null : sel.sections,
-              param: $('param').value};
+              param: $('param').value,
+              jitter: Number($('jitter').value),
+              realtime: $('realtime').checked};
   apiPost('/api/start', body)
     .then(function (j) {
       if (!j.ok) { alert(j.error); return; }
