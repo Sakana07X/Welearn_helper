@@ -489,7 +489,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .rs-k { flex: none; font-size: 11px; color: var(--ops-dim); font-weight: 600; }
   #runSummary { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-actions { display: flex; gap: 10px; margin-left: auto; }
-  .console { flex: 1; display: flex; flex-direction: column; min-height: 420px; overflow: hidden; }
+  .console { flex: 1; display: flex; flex-direction: column; min-height: 420px;
+             max-height: calc(100vh - 250px); overflow: hidden; }
+  .console.collapsed { flex: none; min-height: 0; max-height: none; }
+  .console.collapsed #log { display: none; }
   .p-head-d { border-bottom: 1px solid var(--ops-line); }
   .p-head-d .p-title { color: #D5DEE7; }
   .btn-ghost-d { height: 26px; padding: 0 11px; margin-left: auto; border-radius: 5px;
@@ -497,9 +500,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
                  font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
   .btn-ghost-d:hover { color: var(--ops-ink); border-color: #54687C; background: #1B2632; }
   .btn-ghost-d:focus-visible { outline: 2px solid #7FA3CC; outline-offset: 2px; }
-  #log { flex: 1; overflow-y: auto; padding: 10px 16px 14px; white-space: pre-wrap;
+  #log { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 14px; white-space: pre-wrap;
          font: 12.5px/1.7 var(--mono); color: #C6D1DC; border-radius: 0 0 8px 8px; }
   #log .t { color: var(--console-dim); }
+  #log .n { color: var(--console-dim); }
+  #log .more { color: var(--console-dim); font-style: italic; }
+  .log-tools { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .log-tools .btn-ghost-d { margin-left: 0; }
+  .log-count { font: 11px var(--mono); color: var(--ops-dim); font-variant-numeric: tabular-nums; }
 
   @media (max-width: 940px) {
     .workspace { grid-template-columns: 1fr; }
@@ -593,7 +601,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <section class="panel ops console">
       <div class="p-head p-head-d">
         <span class="p-title">运行日志</span>
-        <button id="clearBtn" class="btn-ghost-d" type="button">清空</button>
+        <span class="log-tools">
+          <span id="logCount" class="log-count"></span>
+          <button id="logToggle" class="btn-ghost-d" type="button">收起</button>
+          <button id="clearBtn" class="btn-ghost-d" type="button">清空</button>
+        </span>
       </div>
       <div id="log"></div>
     </section>
@@ -910,30 +922,92 @@ function restoreSelection(sel) {
   });
 }
 
+/* 日志区自我保护:DOM 最多留 LOG_MAX 行(刷上百章时不会越滚越卡),
+   相邻同文本的行合并成一条并标 ×N,新行进来时旧行按上限丢弃 */
+var LOG_MAX = 600;
+var dupEl = null;
+var dupText = null;
+var dupN = 0;
+
+function logLine(timeText, text) {
+  var line = document.createElement('div');
+  var t = document.createElement('span');
+  t.className = 't';
+  t.textContent = '[' + timeText + '] ';
+  var m = document.createElement('span');
+  m.className = 'm';
+  m.textContent = text;
+  var badge = document.createElement('span');
+  badge.className = 'n';
+  line.appendChild(t);
+  line.appendChild(m);
+  line.appendChild(badge);
+  return line;
+}
+
+function trimLog(box) {
+  while (box.children.length > LOG_MAX) {
+    var first = box.firstChild;
+    if (first === dupEl) { dupEl = null; dupText = null; dupN = 0; }
+    box.removeChild(first);
+  }
+}
+
+function updateLogCount() {
+  var el = $('logCount');
+  var box = $('log');
+  if (!el || !box) return;
+  var n = box.children.length;
+  el.textContent = n ? n + ' 行 / 最多 ' + LOG_MAX : '';
+}
+
+function pushLogLine(box, timeText, text) {
+  if (dupEl && dupText === text && dupEl.parentNode === box) {
+    dupN++;
+    dupEl.firstChild.textContent = '[' + timeText + '] ';
+    var badge = dupEl.querySelector('.n');
+    if (badge) badge.textContent = '  ×' + dupN;
+    return;
+  }
+  var line = logLine(timeText, text);
+  box.appendChild(line);
+  dupEl = line;
+  dupText = text;
+  dupN = 1;
+  trimLog(box);
+}
+
 function appendLogs(entries) {
   var box = $('log');
   var autoscroll = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
   for (var i = 0; i < entries.length; i++) {
     var e = entries[i];
     if (e[0] > lastSeq) lastSeq = e[0];
-    var line = document.createElement('div');
-    var t = document.createElement('span');
-    t.className = 't';
-    t.textContent = '[' + e[1] + '] ';
-    line.appendChild(t);
-    line.appendChild(document.createTextNode(e[2]));
-    box.appendChild(line);
+    pushLogLine(box, e[1], e[2]);
   }
   if (autoscroll) box.scrollTop = box.scrollHeight;
+  updateLogCount();
 }
 
 /* 本地提示行:不经过 appendLogs,避免伪造序号污染 lastSeq 导致后续服务端日志全部丢失 */
 function appendLocal(text) {
   var box = $('log');
-  var line = document.createElement('div');
-  line.textContent = text;
-  box.appendChild(line);
+  var d = new Date();
+  var hh = ('0' + d.getHours()).slice(-2);
+  var mi = ('0' + d.getMinutes()).slice(-2);
+  var ss = ('0' + d.getSeconds()).slice(-2);
+  pushLogLine(box, hh + ':' + mi + ':' + ss, text);
   box.scrollTop = box.scrollHeight;
+  updateLogCount();
+}
+
+function resetLog() {
+  var box = $('log');
+  box.innerHTML = '';
+  dupEl = null;
+  dupText = null;
+  dupN = 0;
+  updateLogCount();
 }
 
 /* 刷新课程(保留选择);若已选课程则连单元一起刷新并恢复单元/小节勾选 */
@@ -1058,7 +1132,15 @@ $('realtime').addEventListener('change', function () {
   updateSummary();
 });
 updateJitterVisibility();
-$('clearBtn').addEventListener('click', function () { $('log').innerHTML = ''; });
+$('clearBtn').addEventListener('click', resetLog);
+
+/* 收起日志面板:整块收成只剩标题栏,页面不再被长日志拖长 */
+$('logToggle').addEventListener('click', function () {
+  var panel = document.querySelector('.console');
+  panel.classList.toggle('collapsed');
+  var collapsed = panel.classList.contains('collapsed');
+  $('logToggle').textContent = collapsed ? '展开' : '收起';
+});
 
 $('startBtn').addEventListener('click', function () {
   var sel = buildSelection();
