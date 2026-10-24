@@ -465,6 +465,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .unit-row > label:hover { background: var(--hover); }
   .u-no { flex: none; font: 600 11px var(--mono); color: var(--ink-3); letter-spacing: .3px; }
   .u-name { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+  .sec-all-btn { flex: none; margin-left: auto; height: 22px; padding: 0 9px; border-radius: 5px;
+                 border: 1px dashed var(--line-soft); background: transparent; color: var(--ink-3);
+                 font-weight: 600; font-size: 11px; line-height: 1; font-family: inherit; cursor: pointer; }
+  .sec-all-btn:hover { color: var(--blue); border-color: var(--blue); }
+  .sec-all-btn:disabled { opacity: .5; cursor: default; }
   .unit-off .u-name { color: var(--ink-3); }
   .sec-box { margin: 1px 0 4px 31px; padding-left: 12px; border-left: 2px solid var(--line-soft); }
   .sec-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 5px;
@@ -568,7 +573,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <section class="panel">
       <div class="p-head"><span class="p-step">3</span><span class="p-title">单元与小节</span></div>
       <div class="p-body">
-        <p class="tip">勾选要刷的单元;勾选单元后展开小节。勾选小节 = 只刷勾选的,不勾 = 刷整个单元。</p>
+        <p class="tip">勾选单元会自动全选它下面的小节;可用「全选小节/取消全选」按钮或单独取消某些小节来微调,一个都不勾 = 不刷这个单元。</p>
         <label class="all-row" for="allUnits"><input type="checkbox" id="allUnits">全部单元(忽略下方勾选)</label>
         <div id="unitTree"></div>
       </div>
@@ -730,6 +735,21 @@ function renderTree(units) {
     nameSpan.className = 'u-name';
     nameSpan.textContent = u.unitname + ' ' + u.name;
     label.appendChild(nameSpan);
+    var secAllBtn = document.createElement('button');
+    secAllBtn.type = 'button';
+    secAllBtn.className = 'sec-all-btn';
+    secAllBtn.dataset.no = String(no);
+    secAllBtn.textContent = '全选小节';
+    /* 按钮在 label 内部:必须掐掉默认动作,否则点它会连带把单元勾选翻面 */
+    secAllBtn.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      var n = this.dataset.no;
+      var secs = unitSecs(n);
+      var allOn = secs.length > 0 && secs.every(function (sc) { return sc.checked; });
+      setUnitSecs(n, !allOn);
+    });
+    label.appendChild(secAllBtn);
     var secBox = document.createElement('div');
     secBox.className = 'sec-box';
     secBox.dataset.no = String(no);
@@ -764,7 +784,7 @@ function renderSecs(no, sections) {
     cb.dataset.no = String(no);
     cb.dataset.sec = String(secNo);
     if (!s.visible) { cb.disabled = true; cb.dataset.baseDisabled = '1'; }   // 未开放小节不可刷
-    cb.addEventListener('change', updateSummary);
+    cb.addEventListener('change', function () { onSecToggled(this); });
     label.appendChild(cb);
     var noSpan = document.createElement('span');
     noSpan.className = 'u-no';
@@ -778,6 +798,7 @@ function renderSecs(no, sections) {
     label.appendChild(nameSpan);
     box.appendChild(label);
   }
+  syncSecAllLabel(no);
   updateSummary();
 }
 
@@ -825,16 +846,90 @@ function ensureSecs(no, done) {
     });
 }
 
-function onUnitToggled(cb) {
-  var box = document.querySelector('.sec-box[data-no="' + cb.dataset.no + '"]');
+/* 某个单元下所有可勾选的小节(未开放小节的 disabled 不算) */
+function unitSecs(no) {
+  var all = document.querySelectorAll('.sec-cb[data-no="' + no + '"]');
+  var out = [];
+  for (var i = 0; i < all.length; i++) {
+    if (!all[i].disabled) out.push(all[i]);
+  }
+  return out;
+}
+
+/* 父单元勾选跟随小节:全勾=实心勾,部分=横线(半选),全不勾=取消勾选(仍留着面板可再勾) */
+function syncUnitCb(no) {
+  var cb = document.querySelector('.unit-cb[data-no="' + no + '"]');
+  if (!cb) return;
+  var secs = unitSecs(no);
+  if (!secs.length) { cb.indeterminate = false; return; }
+  var on = 0;
+  for (var i = 0; i < secs.length; i++) if (secs[i].checked) on++;
+  if (on === secs.length) {
+    cb.checked = true;
+    cb.indeterminate = false;
+  } else if (on > 0) {
+    cb.checked = true;
+    cb.indeterminate = true;
+  } else {
+    cb.checked = false;
+    cb.indeterminate = false;
+  }
+}
+
+/* 按钮文案跟着状态走 */
+function syncSecAllLabel(no) {
+  var btn = document.querySelector('.sec-all-btn[data-no="' + no + '"]');
+  if (!btn) return;
+  var secs = unitSecs(no);
+  var allOn = secs.length > 0 && secs.every(function (sc) { return sc.checked; });
+  btn.textContent = allOn ? '取消全选' : '全选小节';
+}
+
+/* 全选/全不选某单元下的小节(按钮用) */
+function setUnitSecs(no, on) {
+  var cb = document.querySelector('.unit-cb[data-no="' + no + '"]');
+  if (on && cb && !cb.checked) {   // 单元还没勾:先勾上(会自动展开并全选)
+    cb.checked = true;
+    onUnitToggled(cb, true);
+    return;
+  }
+  ensureSecs(no, function () {
+    unitSecs(no).forEach(function (sc) { sc.checked = on; });
+    if (!on && cb) cb.indeterminate = false;
+    syncUnitCb(no);
+    syncSecAllLabel(no);
+    updateSummary();
+  });
+}
+
+function onSecToggled(sc) {
+  var no = sc.dataset.no;
+  syncUnitCb(no);
+  syncSecAllLabel(no);
+  updateSummary();
+}
+
+/* autoSelect: 用户手动勾单元时自动全选小节;恢复勾选(刷新后复原)传 false,避免覆盖用户原有的部分选择 */
+function onUnitToggled(cb, autoSelect) {
+  var no = Number(cb.dataset.no);
+  var box = document.querySelector('.sec-box[data-no="' + no + '"]');
   if (!box) return;
+  var auto = autoSelect !== false;
   if (cb.checked) {
     box.style.display = '';
-    ensureSecs(Number(cb.dataset.no));
+    ensureSecs(no, function () {
+      if (auto) unitSecs(no).forEach(function (sc) { sc.checked = true; });
+      syncUnitCb(no);
+      syncSecAllLabel(no);
+      updateSummary();
+    });
   } else {
     box.style.display = 'none';
+    unitSecs(no).forEach(function (sc) { sc.checked = false; });
+    cb.indeterminate = false;
+    syncSecAllLabel(no);
+    updateSummary();
   }
-  updateSummary();
 }
 
 function applyAllUnits() {
@@ -843,6 +938,7 @@ function applyAllUnits() {
   document.querySelectorAll('.sec-cb').forEach(function (sc) {
     sc.disabled = on || sc.dataset.baseDisabled === '1';
   });
+  document.querySelectorAll('.sec-all-btn').forEach(function (b) { b.disabled = on; });
   $('unitTree').style.opacity = on ? '0.5' : '';
   updateSummary();
 }
@@ -898,28 +994,41 @@ function buildSelection() {
   return sel;
 }
 
-/* 刷新/重登后恢复勾选:单元直接打勾,小节需重新拉取后再打勾 */
+/* 刷新/重登后恢复勾选。顺序很重要:先拉小节、按记录打勾,再决定单元勾选状态——
+   否则 onUnitToggled 在"小节暂时都是 0 勾"的瞬间会把单元勾掉,恢复静默失效。
+   有明确小节记录的按记录恢复;没有记录(旧数据/未加载)的按整单元处理。 */
 function restoreSelection(sel) {
   if (!sel) return;
   $('allUnits').checked = !!sel.allUnits;
   applyAllUnits();
   var want = {};
   (sel.units || []).forEach(function (no) { want[no] = true; });
-  document.querySelectorAll('.unit-cb').forEach(function (cb) {
-    cb.checked = !!want[cb.dataset.no];
-    if (cb.checked) onUnitToggled(cb);
-  });
   var secs = sel.sections || {};
   Object.keys(secs).forEach(function (noStr) {
+    if (!want[noStr]) return;
+    var list = secs[noStr] || [];
     var cb = document.querySelector('.unit-cb[data-no="' + noStr + '"]');
-    if (!cb || !cb.checked) return;
+    var box = document.querySelector('.sec-box[data-no="' + noStr + '"]');
+    if (!cb || !list.length) return;
+    cb.checked = true;
+    if (box) box.style.display = '';
     ensureSecs(Number(noStr), function () {
       document.querySelectorAll('.sec-cb[data-no="' + noStr + '"]').forEach(function (sc) {
-        sc.checked = secs[noStr].indexOf(Number(sc.dataset.sec)) >= 0;
+        sc.checked = list.indexOf(Number(sc.dataset.sec)) >= 0;
       });
+      syncUnitCb(noStr);
+      syncSecAllLabel(noStr);
       updateSummary();
     });
   });
+  document.querySelectorAll('.unit-cb').forEach(function (cb) {
+    var no = cb.dataset.no;
+    if (!want[no]) return;
+    if (secs[no] && secs[no].length) return;   // 已按记录恢复
+    cb.checked = true;
+    onUnitToggled(cb, true);                   // 无小节记录 = 整单元,自动全选
+  });
+  updateSummary();
 }
 
 /* 日志区自我保护:DOM 最多留 LOG_MAX 行(刷上百章时不会越滚越卡),
