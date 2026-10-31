@@ -104,6 +104,14 @@ class TimeTask:
         return self._spread(GAP_BASE, jitter)
 
     @staticmethod
+    def _shuffle_order(pending: List[Tuple[int, int, dict]], shuffle: bool) -> bool:
+        """按需原地打乱章节顺序;真正打乱返回 True。只有一章时无从打乱。"""
+        if not shuffle or len(pending) < 2:
+            return False
+        random.shuffle(pending)
+        return True
+
+    @staticmethod
     def _keepalive_step(jitter: float) -> float:
         """续期间隔:随机性开启时在 60 秒上下浮动,不再卡整数 60"""
         if jitter <= 0:
@@ -116,10 +124,11 @@ class TimeTask:
         return random.randint(target_time[0], target_time[1])
 
     def run(self, units, param, sections=None, jitter: float = 0.0,
-            realtime: bool = True) -> Dict[str, Any]:
+            realtime: bool = True, shuffle: bool = False) -> Dict[str, Any]:
         """units: 0=全部单元, [n,...]=指定单元; sections: None=整单元,
         {单元编号: [小节编号]}=只刷勾选小节; jitter: 随机性百分比(0~100);
-        realtime: True=按真实时间串行刷(每章占满目标秒数), False=并发立即刷完(旧版节奏)。
+        realtime: True=按真实时间串行刷(每章占满目标秒数), False=并发立即刷完(旧版节奏);
+        shuffle: True=把待刷章节的执行顺序随机打乱,不再每次从第一个单元第一节开始。
 
         默认按真实时间:章节逐个执行,每章占用它自己的目标秒数真实时间;
         开启随机性后每章时长各有偏移,时间线不会整整齐齐。
@@ -128,6 +137,7 @@ class TimeTask:
         target_time = param
         jitter = self.normalize_jitter(jitter)
         realtime = bool(realtime)
+        shuffle = bool(shuffle)
         errors: List[str] = []
 
         indices = range(0, len(self.units)) if all_units else [u - 1 for u in unit_list]
@@ -145,6 +155,9 @@ class TimeTask:
                     continue   # 指定小节模式:只刷勾选的小节
                 base = self._generate_learning_time(target_time)
                 pending.append((base, self._jittered(base, jitter), chapter))
+
+        if self._shuffle_order(pending, shuffle):
+            self.on_log(f"已乱序:{len(pending)} 个章节的执行顺序随机打乱")
 
         total_learning_time = sum(actual for _, actual, _ in pending) if realtime else 0
         if not realtime:
@@ -179,7 +192,8 @@ class TimeTask:
         asyncio.run(runner())
         return {'total': len(pending), 'succeed': len(pending) - len(errors),
                 'failed': len(errors), 'errors': list(errors),
-                'seconds': total_learning_time, 'jitter': jitter, 'realtime': realtime}
+                'seconds': total_learning_time, 'jitter': jitter, 'realtime': realtime,
+                'shuffle': shuffle}
 
     async def _open_chapter(self, chapter: Dict, jitter: float,
                             errors: List[str]) -> Optional[Dict[str, Any]]:
@@ -343,7 +357,8 @@ def welearn_time_run():
             如:希望每个练习增加10~30秒,则输入 10,30
 
             说明:默认按真实时间刷,章节按顺序逐个进行,总耗时约等于各练习时长之和;
-            关闭真实时间则并发立即刷完,不占用实际时长。
+            关闭真实时间则并发立即刷完,不占用实际时长;
+            乱序刷会打乱章节执行顺序(时长设置不变),避免每次都从头到尾一模一样。
         '''))
         print("\n\n")
 
@@ -364,7 +379,11 @@ def welearn_time_run():
         else:
             jitter = 0.0
 
-        result = task.run(unit_index, target_time, jitter=jitter, realtime=realtime)
+        shuffle_raw = input("是否乱序刷?(y=打乱章节执行顺序,直接回车=按单元/小节顺序)[N]: ").strip().lower()
+        shuffle = shuffle_raw in ("y", "yes", "on", "1", "true", "是")
+
+        result = task.run(unit_index, target_time, jitter=jitter,
+                          realtime=realtime, shuffle=shuffle)
 
         print('运行结束!!\n错误:', result['failed'], '个')
         for index, error in enumerate(result['errors'], start=1):

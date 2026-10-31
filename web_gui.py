@@ -296,6 +296,9 @@ def create_app():
             return jsonify(ok=False, error=f"参数格式错误:{e}\n模式1: 100   模式2: 70,100"), 400
         jitter = welearn_time.TimeTask.normalize_jitter(
             payload.get("jitter", welearn_time.JITTER_DEFAULT))
+        raw_shuffle = payload.get("shuffle", False)
+        shuffle = (raw_shuffle if isinstance(raw_shuffle, bool)
+                   else str(raw_shuffle).strip().lower() in ("1", "true", "yes", "on"))
         raw_realtime = payload.get("realtime", True)
         realtime = (raw_realtime if isinstance(raw_realtime, bool)
                     else str(raw_realtime).strip().lower() not in ("0", "false", "no", "off", ""))
@@ -308,7 +311,8 @@ def create_app():
             try:
                 if state.mode == "time":
                     result = state.task.run(0 if all_units else unit_list, param,
-                                            section_map, jitter=jitter, realtime=realtime)
+                                            section_map, jitter=jitter, realtime=realtime,
+                                            shuffle=shuffle)
                 else:
                     result = state.task.run(0 if all_units else unit_list, param, section_map)
             except Exception as e:
@@ -332,6 +336,7 @@ def create_app():
             state.worker = threading.Thread(target=work, daemon=True)
         state.log(f"开始任务:{desc} 参数={param}" +
                   (f" 真实时间={'开' if realtime else '关'} 随机性={jitter:.0f}%"
+                   f" 乱序={'开' if shuffle else '关'}"
                    if state.mode == "time" else ""))
         state.worker.start()
         return jsonify(ok=True)
@@ -587,6 +592,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <div class="field" id="realtimeField"><label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked>按真实时间刷(每章占满目标秒数;取消勾选=并发立即刷完)<span class="f-note" id="realtimeHint"></span></label></div>
         <div class="field" id="jitterField"><span class="f-label">随机性 <b id="jitterVal">20%</b> (每章时长在 ±该比例内浮动,0 = 完全规律):</span>
           <input type="range" id="jitter" class="range" min="0" max="100" step="5" value="20"></div>
+        <div class="field" id="shuffleField"><label class="all-row" for="shuffle"><input type="checkbox" id="shuffle">乱序刷(打乱章节执行顺序,不按单元/小节从小到大)</label></div>
       </div>
     </section>
   </div>
@@ -652,6 +658,8 @@ function updateJitterVisibility() {
   $('jitter').disabled = !on || !rt;
   $('realtimeField').style.opacity = on ? '' : '0.55';
   $('jitterField').style.opacity = (on && rt) ? '' : '0.55';
+  $('shuffle').disabled = !on;
+  $('shuffleField').style.opacity = on ? '' : '0.55';
   $('realtimeHint').textContent = on ? '' : '  ← 切到「刷学习时长」才生效';
 }
 
@@ -953,6 +961,7 @@ function updateSummary() {
     suffix += $('realtime').checked
       ? ' 真实时间刷 随机性 ' + $('jitter').value + '%'
       : ' 立即刷完';
+    if ($('shuffle').checked) suffix += ' 乱序';
   }
   if ($('allUnits').checked) {
     el.textContent = '全部单元' + suffix;
@@ -1240,6 +1249,7 @@ $('realtime').addEventListener('change', function () {
   updateJitterVisibility();
   updateSummary();
 });
+$('shuffle').addEventListener('change', updateSummary);
 updateJitterVisibility();
 $('clearBtn').addEventListener('click', resetLog);
 
@@ -1261,7 +1271,8 @@ $('startBtn').addEventListener('click', function () {
               sections: sel.allUnits ? null : sel.sections,
               param: $('param').value,
               jitter: Number($('jitter').value),
-              realtime: $('realtime').checked};
+              realtime: $('realtime').checked,
+              shuffle: $('shuffle').checked};
   apiPost('/api/start', body)
     .then(function (j) {
       if (!j.ok) { alert(j.error); return; }
