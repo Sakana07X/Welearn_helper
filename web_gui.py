@@ -17,6 +17,7 @@ import welearn_accuracy
 import welearn_common
 import welearn_time
 import welearn_effort
+import welearn_score
 from welearn_common import LoginError, WelearnError
 
 BANNER = """**********  Created By Avenshy & SSmJaE  **********
@@ -391,7 +392,15 @@ def create_app():
         totals = result["totals"]
         state.log(f"抓分完成:已完成 {totals['done']} 章,待刷 {totals['pending']} 章,"
                   f"合计 {totals['minutes']} 分钟 / 学习类约 {totals['study_points']} 点")
-        return jsonify(ok=True, rows=result["rows"], totals=totals, errors=result["errors"])
+        plan = welearn_score.plan(
+        result["rows"],
+        per_section_seconds=payload.get("duration") or payload.get("param") or 60,
+        target=payload.get("target"))
+        for line in welearn_score.format_plan(plan):
+            state.log(line)
+        totals["plan"] = plan
+        return jsonify(ok=True, rows=result["rows"], totals=totals, errors=result["errors"],
+                       plan=plan)
 
 
     @app.route("/api/stop", methods=["POST"])
@@ -645,7 +654,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <div class="field" id="realtimeField"><label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked>按真实时间刷(每章占满目标秒数;取消勾选=并发立即刷完)<span class="f-note" id="realtimeHint"></span></label></div>
         <div class="field" id="jitterField"><span class="f-label">随机性 <b id="jitterVal">20%</b> (每章时长在 ±该比例内浮动,0 = 完全规律):</span>
           <input type="range" id="jitter" class="range" min="0" max="100" step="5" value="20"></div>
-        <div class="field" id="shuffleField"><label class="all-row" for="shuffle"><input type="checkbox" id="shuffle">乱序刷(打乱章节执行顺序,不按单元/小节从小到大)</label></div>
+        <div class="field" id="targetField"><label class="all-row" for="target">目标努力值(留空 = 只显示预计;填了就算还差多少)</label><input type="number" id="target" min="0" max="100000" step="10" placeholder="例如 900,留空则只显示预计"></div><div class="field" id="shuffleField"><label class="all-row" for="shuffle"><input type="checkbox" id="shuffle">乱序刷(打乱章节执行顺序,不按单元/小节从小到大)</label></div>
       </div>
     </section>
   </div>
@@ -1017,6 +1026,7 @@ function updateSummary() {
       ? ' 真实时间刷 随机性 ' + $('jitter').value + '%'
       : ' 立即刷完';
     if ($('shuffle').checked) suffix += ' 乱序';
+  if ($('target').value.trim()) suffix += ' 目标 ' + $('target').value.trim() + ' 点';
   }
   if ($('allUnits').checked) {
     el.textContent = '全部单元' + suffix;
@@ -1331,16 +1341,30 @@ $('probeBtn').addEventListener('click', function () {
   $('probeBtn').disabled = true;
   $('statusText').textContent = '抓分中(只读)...';
   apiPost('/api/probe', {units: sel.allUnits ? 0 : sel.units,
-                         sections: sel.allUnits ? null : sel.sections})
+                         sections: sel.allUnits ? null : sel.sections,
+                         duration: Number($('param').value) || 60,
+                         target: $('target').value.trim()})
     .then(function (j) {
       if (!j.ok) { alert(j.error); return; }
       var t = j.totals || {};
-      $('statusText').textContent = '抓分完成:' + (t.chapters || 0) + ' 章,学习类约 '
-        + (t.study_points || 0) + ' 点';
+      var p = j.plan || {};
+      var head = '抓分完成:' + (t.chapters || 0) + ' 章';
+      if (p.total !== undefined) {
+        head += ' | 预计可得 ' + p.total + ' 点(时长 +' + (p.time_points || 0)
+          + ' / 完成度 +' + (p.accuracy_points || 0) + ')';
+        if (p.target !== undefined) {
+          head += p.reachable ? ' 已达目标 ' + p.target
+            : ' | 目标 ' + p.target + ' 还差 ' + p.gap + ' 点,需再刷 '
+              + p.sections_needed + ' 章或 ' + p.tasks_needed + ' 个满分测试';
+        }
+      }
+      $('statusText').textContent = head;
     })
     .catch(function (err) { alert('请求失败:' + err); })
     .finally(function () { $('probeBtn').disabled = false; });
 });
+
+$('target').addEventListener('input', updateSummary);
 
 $('startBtn').addEventListener('click', function () {
   var sel = buildSelection();
