@@ -16,6 +16,7 @@ from flask import Flask, jsonify, request
 import welearn_accuracy
 import welearn_common
 import welearn_time
+import welearn_effort
 from welearn_common import LoginError, WelearnError
 
 BANNER = """**********  Created By Avenshy & SSmJaE  **********
@@ -341,6 +342,58 @@ def create_app():
         state.worker.start()
         return jsonify(ok=True)
 
+    @app.route("/api/rules", methods=["POST"])
+    def api_rules():
+        """把努力值计分规则原文(来自 icourse.apk 资源里的规则页)打到日志里。"""
+        state.log(f"努力值计分规则(共 {len(welearn_effort.RULES)} 条,原文来自 App 计分规则页):")
+        for line in welearn_effort.RULES:
+            state.log("  · " + line)
+        state.log("  学习类每分钟固定拿 3 点(在线+频度+时段各 1 点/分钟),"
+                  "每满 3 分钟再加 10 点学习次数(同一练习上限 50 点);"
+                  "测试/作业按百分制得分折算(听力 50 点、阅读 80 点 × 得分百分比)。")
+        return jsonify(ok=True, rules=welearn_effort.RULES)
+
+
+    @app.route("/api/probe", methods=["POST"])
+    def api_probe():
+        """只读抓分:只 GET 章节清单(scoLeaves),不 startsco/setscoinfo/savescoinfo。"""
+        payload = request.get_json(silent=True) or {}
+        with state.lock:
+            task = state.task
+            units = list(state.units or [])
+            busy = state.running or state.worker_busy() or state.fetching
+        if task is None:
+            return jsonify(ok=False, error="请先登录"), 400
+        if busy:
+            return jsonify(ok=False, error="任务正在进行,请先停止"), 409
+        if not getattr(task, "cid", ""):
+            return jsonify(ok=False, error="请先选择课程并加载单元"), 400
+        try:
+            all_units, unit_list, _section_map = welearn_common.normalize_targets(
+                payload.get("units", 0), payload.get("sections"))
+        except (TypeError, ValueError) as exc:
+            return jsonify(ok=False, error=f"参数错误:{exc}"), 400
+
+        state.log("开始抓分(只读:仅读取章节清单,不提交任何学习数据)")
+        try:
+            result = welearn_effort.probe(
+                task.session, task.cid, task.uid, task.classid,
+                None if all_units else unit_list,
+                on_log=state.log, stop_event=state.stop_event,
+                advance_until_error=all_units,
+                max_units=len(units) + 5)
+        except (LoginError, WelearnError) as exc:
+            state.log(f"抓分失败:{exc}")
+            return jsonify(ok=False, error=str(exc)), 400
+
+        for row in result["rows"]:
+            state.log("  " + welearn_effort.format_row(row))
+        totals = result["totals"]
+        state.log(f"抓分完成:已完成 {totals['done']} 章,待刷 {totals['pending']} 章,"
+                  f"合计 {totals['minutes']} 分钟 / 学习类约 {totals['study_points']} 点")
+        return jsonify(ok=True, rows=result["rows"], totals=totals, errors=result["errors"])
+
+
     @app.route("/api/stop", methods=["POST"])
     def api_stop():
         state.stop_event.set()
@@ -604,6 +657,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <span id="runSummary">未选择单元</span>
       </div>
       <div class="run-actions">
+        <button id="probeBtn" class="btn btn-lg" type="button" title="只读抓取每章节已学时长与学习类努力值,不提交任何数据" style="margin-right:8px;background:#eef2f7;color:#334155;box-shadow:none;">抓分(只读)</button>
+        <button id="rulesBtn" class="btn btn-lg" type="button" title="显示努力值计分规则(来自 App 计分规则页)" style="margin-right:8px;background:#eef2f7;color:#334155;box-shadow:none;">计分规则</button>
         <button id="startBtn" class="btn btn-lg btn-run" disabled>开始任务</button>
         <button id="stopBtn" class="btn btn-lg btn-stop" disabled>停止</button>
       </div>
@@ -1259,6 +1314,32 @@ $('logToggle').addEventListener('click', function () {
   panel.classList.toggle('collapsed');
   var collapsed = panel.classList.contains('collapsed');
   $('logToggle').textContent = collapsed ? '展开' : '收起';
+});
+
+$('rulesBtn').addEventListener('click', function () {
+  apiPost('/api/rules', {})
+    .then(function (j) { if (!j.ok) alert(j.error); })
+    .catch(function (err) { alert('请求失败:' + err); });
+});
+
+$('probeBtn').addEventListener('click', function () {
+  var sel = buildSelection();
+  if (!sel.allUnits && !sel.units.length) {
+    alert('请至少勾选一个单元,或勾选"全部单元"');
+    return;
+  }
+  $('probeBtn').disabled = true;
+  $('statusText').textContent = '抓分中(只读)...';
+  apiPost('/api/probe', {units: sel.allUnits ? 0 : sel.units,
+                         sections: sel.allUnits ? null : sel.sections})
+    .then(function (j) {
+      if (!j.ok) { alert(j.error); return; }
+      var t = j.totals || {};
+      $('statusText').textContent = '抓分完成:' + (t.chapters || 0) + ' 章,学习类约 '
+        + (t.study_points || 0) + ' 点';
+    })
+    .catch(function (err) { alert('请求失败:' + err); })
+    .finally(function () { $('probeBtn').disabled = false; });
 });
 
 $('startBtn').addEventListener('click', function () {
