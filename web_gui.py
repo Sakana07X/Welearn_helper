@@ -17,6 +17,7 @@ import welearn_accuracy
 import welearn_common
 import welearn_time
 import welearn_effort
+import welearn_target
 import welearn_score
 from welearn_common import LoginError, WelearnError
 
@@ -420,6 +421,74 @@ def create_app():
                        plan=plan)
 
 
+    @app.route("/api/target_start", methods=["POST"])
+    def api_target_start():
+        """按目标努力值刷:每刷一章就重新抓分,累计到目标就停(只算当前模式那一路)。"""
+        payload = request.get_json(silent=True) or {}
+        if state.task is None:
+            return jsonify(ok=False, error="请先登录并选择课程"), 400
+        raw_target = str(payload.get("target", "")).strip()
+        if not raw_target:
+            return jsonify(ok=False, error="请先在「目标努力值」里填写要刷到的分数"), 400
+        try:
+            target = int(float(raw_target))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="目标努力值必须是数字"), 400
+        if target <= 0:
+            return jsonify(ok=False, error="目标努力值要大于 0"), 400
+        mode = payload.get("mode") or state.mode
+        if mode not in ("time", "accuracy"):
+            mode = "time"
+        try:
+            param = welearn_common.parse_numeric_param(str(payload.get("param", "60")))
+        except ValueError as e:
+            return jsonify(ok=False, error=f"参数格式错误:{e}"), 400
+        jitter = welearn_time.TimeTask.normalize_jitter(
+            payload.get("jitter", welearn_time.JITTER_DEFAULT))
+        raw_realtime = payload.get("realtime", True)
+        realtime = (raw_realtime if isinstance(raw_realtime, bool)
+                    else str(raw_realtime).strip().lower() not in ("0", "false", "no", "off", ""))
+        raw_shuffle = payload.get("shuffle", False)
+        shuffle = (raw_shuffle if isinstance(raw_shuffle, bool)
+                   else str(raw_shuffle).strip().lower() in ("1", "true", "yes", "on"))
+        try:
+            qsec = float(payload.get("qsec", welearn_accuracy.ANSWER_SECONDS_DEFAULT))
+        except (TypeError, ValueError):
+            qsec = welearn_accuracy.ANSWER_SECONDS_DEFAULT
+        try:
+            qcount = int(float(payload.get("qcount", welearn_accuracy.QUESTION_COUNT_DEFAULT)))
+        except (TypeError, ValueError):
+            qcount = welearn_accuracy.QUESTION_COUNT_DEFAULT
+
+        def work():
+            try:
+                result = welearn_target.run(
+                    state.task, mode, target, param, jitter=jitter, realtime=realtime,
+                    qsec=qsec, qcount=qcount, shuffle=shuffle,
+                    on_log=state.log, stop_event=state.stop_event)
+            except Exception as e:
+                msg = repr(e)
+                state._set(False, "待命")
+                state.log(f"按目标刷异常终止:{msg}")
+                return
+            with state.lock:
+                state.last_result = result
+            state._set(False, "待命")
+            for line in welearn_target.format_result(result):
+                state.log(line)
+
+        with state.lock:
+            if state.worker_busy() or state.fetching:
+                return jsonify(ok=False, error="任务正在进行,请先停止"), 409
+            state.stop_event.clear()
+            state.running = True
+            state.running_what = "按目标刷"
+            state.worker = threading.Thread(target=work, daemon=True)
+        state.log(f"按目标刷开始:目标 {target} 点,只算"
+                  + ("学习时长" if mode == "time" else "完成度"))
+        state.worker.start()
+        return jsonify(ok=True, target=target, mode=mode)
+
     @app.route("/api/stop", methods=["POST"])
     def api_stop():
         state.stop_event.set()
@@ -677,6 +746,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <input type="number" id="qcount" min="1" max="200" step="1" value="10" title="一份练习的题量">
           </div></div>
         <div class="field" id="targetField"><label class="all-row" for="target">目标努力值(留空 = 只显示预计;填了就算还差多少)</label><input type="number" id="target" min="0" max="100000" step="10" placeholder="例如 900,留空则只显示预计"></div><div class="field" id="shuffleField"><label class="all-row" for="shuffle"><input type="checkbox" id="shuffle">乱序刷(打乱章节执行顺序,不按单元/小节从小到大)</label></div>
+          <span class="f-note">填了分数就点下面蓝色「按目标刷」:每刷一章重新抓分,累计到目标自动停;只想看预计值就留空,点「抓分(只读)」</span>
       </div>
     </section>
   </div>
@@ -689,6 +759,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
       <div class="run-actions">
         <button id="probeBtn" class="btn btn-lg" type="button" title="只读抓取每章节已学时长与学习类努力值,不提交任何数据" style="margin-right:8px;background:#eef2f7;color:#334155;box-shadow:none;">抓分(只读)</button>
+        <button id="targetBtn" class="btn btn-lg" type="button" title="按目标努力值一直刷到达标为止(每章后重新抓分)" style="margin-right:8px;background:#2563eb;color:#fff;box-shadow:none;">按目标刷</button>
         <button id="rulesBtn" class="btn btn-lg" type="button" title="显示努力值计分规则(来自 App 计分规则页)" style="margin-right:8px;background:#eef2f7;color:#334155;box-shadow:none;">计分规则</button>
         <button id="startBtn" class="btn btn-lg btn-run" disabled>开始任务</button>
         <button id="stopBtn" class="btn btn-lg btn-stop" disabled>停止</button>
@@ -1409,6 +1480,38 @@ $('probeBtn').addEventListener('click', function () {
     })
     .catch(function (err) { alert('请求失败:' + err); })
     .finally(function () { $('probeBtn').disabled = false; });
+});
+
+$('targetBtn').addEventListener('click', function () {
+  var sel = buildSelection();
+  if (!sel.allUnits && !sel.units.length) {
+    alert('请至少勾选一个单元(按目标刷会按这些单元里的章节逐个补分)');
+    return;
+  }
+  var goal = $('target').value.trim();
+  if (!goal) {
+    alert('请先在「目标努力值」里填写要刷到的分数');
+    $('target').focus();
+    return;
+  }
+  if (!confirm('按目标刷到 ' + goal + ' 点(只算''
+    + (getMode() === 'time' ? '学习时长' : '完成度') + ''),开始后每刷一章都会重新抓分?')) return;
+  $('targetBtn').disabled = true;
+  $('statusText').textContent = '按目标刷中...';
+  apiPost('/api/target_start', {mode: getMode(),
+                                param: $('param').value,
+                                target: goal,
+                                jitter: Number($('jitter').value),
+                                realtime: $('realtime').checked,
+                                qsec: Number($('qsec').value) || 25,
+                                qcount: Number($('qcount').value) || 10,
+                                shuffle: $('shuffle').checked})
+    .then(function (j) {
+      if (!j.ok) { alert(j.error); $('targetBtn').disabled = false; return; }
+      setControls(true);
+      $('statusText').textContent = '按目标刷中(目标 ' + goal + ' 点)';
+    })
+    .catch(function (err) { alert('请求失败:' + err); $('targetBtn').disabled = false; });
 });
 
 $('target').addEventListener('input', updateSummary);
