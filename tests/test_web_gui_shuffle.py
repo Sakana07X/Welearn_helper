@@ -23,10 +23,12 @@ def test_shuffle_checkbox_exists():
 
 
 def test_shuffle_participates_in_visibility():
+    """重排后段落元素可能不存在,所以这里断言的是「守卫式赋值」而不是裸 style 赋值。"""
     body = _page()
-    assert "$('shuffle').disabled = !isTime;" in body
-    assert "$('shuffle').disabled = !isTime;" in body
-    assert "$('paceField').style.display = isTime ? 'none' : '';" in body
+    assert "var setDisabled = function (el, on) { if (el) { el.disabled = !on; } };" in body
+    assert "setDisabled($('shuffle'), isTime);" in body
+    assert "var pace = $('paceField');" in body
+    assert "if (pace) { pace.style.display = isTime ? 'none' : ''; }" in body
 
 
 def test_shuffle_submitted_and_shown():

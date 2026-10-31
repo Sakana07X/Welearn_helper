@@ -834,18 +834,25 @@ function setModeLabel() {
 
 /* 始终可见:只有「刷学习时长」模式可改,正确率模式下禁用并淡化,免得以为没有这项 */
 function updateJitterVisibility() {
+  /* 缺任何一个元素都不许抛错:一抛整页事件绑定全废,按钮全哑 */
   var isTime = getMode() === 'time';
-  var rt = $('realtime').checked;
-  $('realtime').disabled = false;
-  $('jitter').disabled = !rt;
-  $('jitterField').style.opacity = rt ? '' : '0.55';
-  $('shuffle').disabled = !isTime;
-  $('shuffleField').style.opacity = isTime ? '' : '0.55';
-  $('paceField').style.display = isTime ? 'none' : '';
-  $('paceField').style.opacity = rt ? '' : '0.55';
-  $('qsec').disabled = !rt;
-  $('qcount').disabled = !rt;
-  $('realtimeHint').textContent = isTime ? '' : '  ← 正确率模式按「每题秒数 x 题量」铺开作答';
+  var rtEl = $('realtime');
+  var rt = rtEl ? rtEl.checked : true;
+  var setDisabled = function (el, on) { if (el) { el.disabled = !on; } };
+  var dim = function (el, on) { if (el) { el.style.opacity = on ? '' : '0.55'; } };
+  setDisabled(rtEl, true);
+  setDisabled($('jitter'), rt);
+  dim($('jitterField'), rt);
+  setDisabled($('shuffle'), isTime);
+  setDisabled($('qsec'), rt);
+  setDisabled($('qcount'), rt);
+  dim($('paceField'), rt);
+  var pace = $('paceField');
+  if (pace) { pace.style.display = isTime ? 'none' : ''; }
+  var hint = $('realtimeHint');
+  if (hint) {
+    hint.textContent = isTime ? '' : '  ← 正确率模式按「每题秒数 x 题量」铺开作答';
+  }
 }
 
 function selectMode(mode) {
@@ -1519,8 +1526,8 @@ $('targetBtn').addEventListener('click', function () {
     $('target').focus();
     return;
   }
-  if (!confirm('按目标刷到 ' + goal + ' 点(只算''
-    + (getMode() === 'time' ? '学习时长' : '完成度') + ''),开始后每刷一章都会重新抓分?')) return;
+  if (!confirm('按目标刷到 ' + goal + ' 点(只算'
+    + (getMode() === 'time' ? '学习时长' : '完成度') + '),开始后每刷一章都会重新抓分?')) return;
   $('targetBtn').disabled = true;
   $('statusText').textContent = '按目标刷中...';
   apiPost('/api/target_start', {mode: getMode(),
@@ -1601,9 +1608,13 @@ function poll() {
     .catch(function () { /* 服务未就绪或已关闭,下轮重试 */ });
 }
 
-renderTree([]);
-poll();
-setInterval(poll, 1000);
+try {
+  renderTree([]);
+  poll();
+  setInterval(poll, 1000);
+} catch (err) {
+  console.error('初始化异常', err);
+}
 </script>
 </body>
 </html>
