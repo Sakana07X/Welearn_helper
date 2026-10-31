@@ -295,8 +295,11 @@ def create_app():
                 if known and max(secs) > len(known):
                     return jsonify(ok=False,
                                    error=f"单元{uno}小节id超出范围(1~{len(known)})"), 400
+        raw_param = str(payload.get("param", "") or "").strip()
+        if not raw_param:
+            raw_param = "100" if (payload.get("mode") or state.mode) == "accuracy" else "60"
         try:
-            param = welearn_common.parse_numeric_param(str(payload.get("param", "")))
+            param = welearn_common.parse_numeric_param(raw_param)
         except ValueError as e:
             return jsonify(ok=False, error=f"参数格式错误:{e}\n模式1: 100   模式2: 70,100"), 400
         jitter = welearn_time.TimeTask.normalize_jitter(
@@ -441,8 +444,11 @@ def create_app():
         mode = payload.get("mode") or state.mode
         if mode not in ("time", "accuracy"):
             mode = "time"
+        raw_param = str(payload.get("param", "") or "").strip()
+        if not raw_param:
+            raw_param = "100" if mode == "accuracy" else "60"
         try:
-            param = welearn_common.parse_numeric_param(str(payload.get("param", "60")))
+            param = welearn_common.parse_numeric_param(raw_param)
         except ValueError as e:
             return jsonify(ok=False, error=f"参数格式错误:{e}"), 400
         jitter = welearn_time.TimeTask.normalize_jitter(
@@ -746,7 +752,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <div class="p-body">
         <div class="p-sub">
           <div class="field"><span class="f-label" id="paramLabel">正确率(100 或 70,100)</span>
-            <input type="text" id="param" placeholder="100"></div>
+            <input type="text" id="param" placeholder="100" value="100"></div>
           <div class="field" id="paceField"><span class="f-label">作答节奏(正确率模式)</span>
             <div class="row-inline">
               <input type="number" id="qsec" min="1" max="600" step="1" value="25" title="每题预估秒数" style="width:74px">
@@ -827,8 +833,14 @@ function getMode() {
 }
 
 function setModeLabel() {
-  $('paramLabel').textContent = getMode() === 'time'
+  var isTime = getMode() === 'time';
+  $('paramLabel').textContent = isTime
     ? '每练习时长秒(30 或 10,30):' : '正确率(100 或 70,100):';
+  var paramEl = $('param');
+  if (paramEl) {
+    paramEl.placeholder = isTime ? '60' : '100';
+    if (!paramEl.value) { paramEl.value = paramEl.placeholder; }
+  }
   updateJitterVisibility();
 }
 
@@ -1531,7 +1543,7 @@ $('targetBtn').addEventListener('click', function () {
   $('targetBtn').disabled = true;
   $('statusText').textContent = '按目标刷中...';
   apiPost('/api/target_start', {mode: getMode(),
-                                param: $('param').value,
+                                param: $('param').value || ($('param').placeholder || '60'),
                                 target: goal,
                                 jitter: Number($('jitter').value),
                                 realtime: $('realtime').checked,
