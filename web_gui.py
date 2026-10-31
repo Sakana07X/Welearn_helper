@@ -406,10 +406,13 @@ def create_app():
         totals = result["totals"]
         state.log(f"抓分完成:已完成 {totals['done']} 章,待刷 {totals['pending']} 章,"
                   f"合计 {totals['minutes']} 分钟 / 学习类约 {totals['study_points']} 点")
+        raw_mode = payload.get("mode") or state.mode
         plan = welearn_score.plan(
-        result["rows"],
-        per_section_seconds=payload.get("duration") or payload.get("param") or 60,
-        target=payload.get("target"))
+            result["rows"],
+            per_section_seconds=payload.get("duration") or payload.get("param") or 60,
+            target=payload.get("target"),
+            mode=raw_mode,
+            percent=payload.get("accuracy") or payload.get("param") or 100)
         for line in welearn_score.format_plan(plan):
             state.log(line)
         totals["plan"] = plan
@@ -1048,7 +1051,10 @@ function updateSummary() {
       ? ' 真实时间刷 随机性 ' + $('jitter').value + '%'
       : ' 立即刷完';
     if ($('shuffle').checked) suffix += ' 乱序';
-  if ($('target').value.trim()) suffix += ' 目标 ' + $('target').value.trim() + ' 点';
+  if ($('target').value.trim()) {
+    suffix += ' 目标 ' + $('target').value.trim() + ' 点(只算'
+      + (getMode() === 'time' ? '学习时长' : '完成度') + ')';
+  }
   }
   if (getMode() !== 'time' && $('realtime').checked) {
     suffix += ' 每题 ' + ($('qsec').value || 25) + ' 秒 x ' + ($('qcount').value || 10) + ' 题';
@@ -1367,7 +1373,11 @@ $('probeBtn').addEventListener('click', function () {
   $('statusText').textContent = '抓分中(只读)...';
   apiPost('/api/probe', {units: sel.allUnits ? 0 : sel.units,
                          sections: sel.allUnits ? null : sel.sections,
-                         duration: Number($('param').value) || 60,
+                         mode: getMode(),
+                         accuracy: $('param').value,
+                         duration: getMode() === 'time'
+                           ? (Number($('param').value) || 60)
+                           : (Number($('qsec').value) || 25),
                          target: $('target').value.trim()})
     .then(function (j) {
       if (!j.ok) { alert(j.error); return; }
@@ -1375,12 +1385,24 @@ $('probeBtn').addEventListener('click', function () {
       var p = j.plan || {};
       var head = '抓分完成:' + (t.chapters || 0) + ' 章';
       if (p.total !== undefined) {
-        head += ' | 预计可得 ' + p.total + ' 点(时长 +' + (p.time_points || 0)
-          + ' / 完成度 +' + (p.accuracy_points || 0) + ')';
+        if (p.mode === 'accuracy') {
+          head += ' | 预计可得(仅完成度)' + (p.accuracy_points || 0) + ' 点';
+        } else if (p.mode === 'time') {
+          head += ' | 预计可得(仅学习时长)' + (p.time_points || 0) + ' 点';
+        } else {
+          head += ' | 预计可得 ' + p.total + ' 点(时长 +' + (p.time_points || 0)
+            + ' / 完成度 +' + (p.accuracy_points || 0) + ')';
+        }
         if (p.target !== undefined) {
-          head += p.reachable ? ' 已达目标 ' + p.target
-            : ' | 目标 ' + p.target + ' 还差 ' + p.gap + ' 点,需再刷 '
-              + p.sections_needed + ' 章或 ' + p.tasks_needed + ' 个满分测试';
+          if (p.reachable) {
+            head += ' 已达目标 ' + p.target;
+          } else if (p.mode === 'accuracy') {
+            head += ' | 目标 ' + p.target + ' 还差 ' + p.gap + ' 点,需再刷 '
+              + p.tasks_needed + ' 章到 ' + p.percent + '% 正确率';
+          } else {
+            head += ' | 目标 ' + p.target + ' 还差 ' + p.gap + ' 点,需再刷 '
+              + p.sections_needed + ' 章';
+          }
         }
       }
       $('statusText').textContent = head;

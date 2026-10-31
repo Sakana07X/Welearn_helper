@@ -70,7 +70,7 @@ def test_page_has_target_field():
 def test_probe_returns_plan_with_target():
     client = web_gui.app.test_client()
     reset_state(FakeProbeTask(make_session(UNITS)), [{"unitname": "U1", "visible": "true"}])
-    resp = client.post("/api/probe", json={"units": [1], "duration": 600, "target": 5000})
+    resp = client.post("/api/probe", json={"units": [1], "duration": 600, "target": 5000, "mode": "all"})
     assert resp.status_code == 200
     data = resp.get_json()
     plan = data["plan"]
@@ -94,7 +94,7 @@ def test_probe_returns_plan_with_target():
 def test_probe_without_target_has_no_gap():
     client = web_gui.app.test_client()
     reset_state(FakeProbeTask(make_session(UNITS)), [{"unitname": "U1", "visible": "true"}])
-    data = client.post("/api/probe", json={"units": [1], "duration": 60}).get_json()
+    data = client.post("/api/probe", json={"units": [1], "duration": 60, "mode": "all"}).get_json()
     assert "target" not in data["plan"]
     assert data["plan"]["total"] == (
         data["plan"]["time_points"] + data["plan"]["accuracy_points"] + data["plan"]["login_points"]
@@ -104,6 +104,6 @@ def test_probe_without_target_has_no_gap():
 def test_probe_plan_is_json_safe():
     client = web_gui.app.test_client()
     reset_state(FakeProbeTask(make_session(UNITS)), [{"unitname": "U1", "visible": "true"}])
-    data = client.post("/api/probe", json={"units": [1], "target": "900"}).get_json()
+    data = client.post("/api/probe", json={"units": [1], "target": "900", "mode": "all"}).get_json()
     json.dumps(data)  # 不抛异常即可
     assert data["plan"]["target"] == 900
