@@ -93,7 +93,9 @@ def create_app():
 
     @app.route("/")
     def index():
-        return INDEX_HTML
+        response = app.response_class(INDEX_HTML, mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        return response
 
     @app.route("/api/login", methods=["POST"])
     def api_login():

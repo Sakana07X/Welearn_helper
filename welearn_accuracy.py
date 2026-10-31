@@ -46,9 +46,11 @@ class AccuracyTask:
     def _stopped(self) -> bool:
         return self.stop_event.is_set()
 
-    def _wait(self, seconds: float) -> None:
-        """阻塞等待指定秒数,期间每 0.5 秒检查一次停止信号,保证停止按钮秒响应。"""
-        remaining = max(0.0, float(seconds))
+    def _wait(self, seconds: float, label: str = "", report_every: float = 10.0) -> None:
+        """阻塞等待指定秒数:每 0.5 秒查一次停止信号,每 report_every 秒打一次进度。"""
+        total = max(0.0, float(seconds))
+        remaining = total
+        logged = 0.0
         while remaining > 0 and not self._stopped():
             step = 0.5 if remaining > 0.5 else remaining
             if self.stop_event is None:
@@ -56,6 +58,9 @@ class AccuracyTask:
             elif self.stop_event.wait(step):
                 return
             remaining -= step
+            if label and report_every > 0 and total - remaining - logged >= report_every:
+                logged = total - remaining
+                self.on_log(f"   {label} 已 {logged:.0f}/{total:.0f} 秒")
 
     @staticmethod
     def _jittered(value: float, jitter: float) -> float:
@@ -148,7 +153,7 @@ class AccuracyTask:
                                                       "uid": self.uid},
                                       headers=sco_headers)
                     if realtime:   # 打开章节到开始作答
-                        self._wait(self._jittered(answer_seconds * 0.08, jitter))
+                        self._wait(self._jittered(answer_seconds * 0.08, jitter), "打开章节")
                     response = self.session.post(AJAX_URL, data={"action": "setscoinfo",
                                                                  "cid": self.cid,
                                                                  "scoid": course["id"],
@@ -166,8 +171,8 @@ class AccuracyTask:
                         chunk = self._jittered(answer_seconds * 0.5, jitter)
                         self.on_log(f"   作答 {qcount} 题 x {qsec:.0f} 秒 ≈ {answer_seconds / 60:.1f} 分钟"
                                     f"(分两段提交,随机性 ±{float(jitter or 0.0):.0f}%)")
-                        self._wait(chunk)
-                        self._wait(self._jittered(answer_seconds * 0.32, jitter))
+                        self._wait(chunk, "作答")
+                        self._wait(self._jittered(answer_seconds * 0.32, jitter), "作答")
                     response = self.session.post(AJAX_URL, data={"action": "savescoinfo160928",
                                                                  "cid": self.cid,
                                                                  "scoid": course["id"],
@@ -188,8 +193,8 @@ class AccuracyTask:
                                 f'方式1:{"成功!!!" if way1_ok else "失败!!!"}  '
                                 f'方式2:{"成功!!!" if way2_ok else "失败!!!"}')
                     if realtime:   # 收尾(看结果 / 提交反馈)与换章间隔
-                        self._wait(self._jittered(answer_seconds * 0.06, jitter))
-                        self._wait(self._jittered(2.0, jitter))
+                        self._wait(self._jittered(answer_seconds * 0.06, jitter), "提交后确认")
+                        self._wait(self._jittered(2.0, jitter), "换章间隔")
                 else:  # 章节已完成
                     self.on_log(f'[ 已完成 ]    {course["location"]}')
             return True
