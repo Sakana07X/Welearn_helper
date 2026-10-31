@@ -1,11 +1,16 @@
 import threading
-from random import randint
+import time
+from random import randint, uniform
 from typing import Any, Callable, Dict, List, Optional
 
 import welearn_common
 from welearn_common import LoginError, WelearnError
 
 AJAX_URL = "https://welearn.sflep.com/Ajax/SCO.aspx"
+
+# 正确率模式的真实节奏默认值:每道题的预估作答秒数,以及一份练习大致有多少题
+ANSWER_SECONDS_DEFAULT = 25.0
+QUESTION_COUNT_DEFAULT = 10
 
 # 伪造的完成数据报文(与原实现逐字一致,{crate} 为占位)
 SCO_DATA_TEMPLATE = ('{"cmi":{"completion_status":"completed","interactions":[],"launch_data":"",'
@@ -41,6 +46,25 @@ class AccuracyTask:
     def _stopped(self) -> bool:
         return self.stop_event.is_set()
 
+    def _wait(self, seconds: float) -> None:
+        """阻塞等待指定秒数,期间每 0.5 秒检查一次停止信号,保证停止按钮秒响应。"""
+        remaining = max(0.0, float(seconds))
+        while remaining > 0 and not self._stopped():
+            step = 0.5 if remaining > 0.5 else remaining
+            if self.stop_event is None:
+                time.sleep(step)
+            elif self.stop_event.wait(step):
+                return
+            remaining -= step
+
+    @staticmethod
+    def _jittered(value: float, jitter: float) -> float:
+        """按 jitter(0~100)在 value 的 ±jitter% 内浮动,返回不小于 0.05 秒的值。"""
+        span = value * max(0.0, min(100.0, float(jitter or 0.0))) / 100.0
+        if span <= 0:
+            return max(0.05, value)
+        return max(0.05, value + uniform(-span, span))
+
     def login(self) -> None:
         welearn_common.login(self.session, self.username, self.password,
                              on_log=self.on_log, stop_event=self.stop_event)
@@ -59,7 +83,9 @@ class AccuracyTask:
         return welearn_common.fetch_sections(self.session, self.cid, self.uid,
                                              unit_index - 1, self.classid)
 
-    def run(self, units, param, sections=None) -> Dict[str, Any]:
+    def run(self, units, param, sections=None, jitter: float = 0.0,
+            realtime: bool = False, qsec: float = ANSWER_SECONDS_DEFAULT,
+            qcount: int = QUESTION_COUNT_DEFAULT) -> Dict[str, Any]:
         """units: 0=全部单元(沿用原版错误驱动推进), [n,...]=指定单元;
         sections: None=整单元, {单元编号: [小节编号]}=只刷勾选小节。"""
         all_units, unit_list, section_map = welearn_common.normalize_targets(units, sections)
@@ -67,6 +93,19 @@ class AccuracyTask:
         way1_succeed, way2_succeed = 0, 0
         way1_failed, way2_failed = 0, 0
         sections_found = 0   # 实际命中的指定小节数(用于越界提示)
+
+        # 真实节奏:每章按「每题秒数 x 题量」铺开,拆成 打开/作答/收尾 三段,各段按 jitter 浮动
+        try:
+            qsec = float(qsec)
+        except (TypeError, ValueError):
+            qsec = ANSWER_SECONDS_DEFAULT
+        try:
+            qcount = int(qcount)
+        except (TypeError, ValueError):
+            qcount = QUESTION_COUNT_DEFAULT
+        qsec = max(0.05, qsec)
+        qcount = max(1, qcount)
+        answer_seconds = qsec * qcount
 
         info_headers = {
             "Referer": f"https://welearn.sflep.com/2019/student/course_info.aspx?cid={self.cid}",
@@ -108,6 +147,8 @@ class AccuracyTask:
                                                       "scoid": course["id"],
                                                       "uid": self.uid},
                                       headers=sco_headers)
+                    if realtime:   # 打开章节到开始作答
+                        self._wait(self._jittered(answer_seconds * 0.08, jitter))
                     response = self.session.post(AJAX_URL, data={"action": "setscoinfo",
                                                                  "cid": self.cid,
                                                                  "scoid": course["id"],
@@ -121,6 +162,12 @@ class AccuracyTask:
                     else:
                         way1_failed += 1
 
+                    if realtime:   # 作答主体时间:qcount 题 x qsec 秒
+                        chunk = self._jittered(answer_seconds * 0.5, jitter)
+                        self.on_log(f"   作答 {qcount} 题 x {qsec:.0f} 秒 ≈ {answer_seconds / 60:.1f} 分钟"
+                                    f"(分两段提交,随机性 ±{float(jitter or 0.0):.0f}%)")
+                        self._wait(chunk)
+                        self._wait(self._jittered(answer_seconds * 0.32, jitter))
                     response = self.session.post(AJAX_URL, data={"action": "savescoinfo160928",
                                                                  "cid": self.cid,
                                                                  "scoid": course["id"],
@@ -140,6 +187,9 @@ class AccuracyTask:
                     self.on_log(f'>>>>>>>>>>>>>>正确率:{crate:>3}%  '
                                 f'方式1:{"成功!!!" if way1_ok else "失败!!!"}  '
                                 f'方式2:{"成功!!!" if way2_ok else "失败!!!"}')
+                    if realtime:   # 收尾(看结果 / 提交反馈)与换章间隔
+                        self._wait(self._jittered(answer_seconds * 0.06, jitter))
+                        self._wait(self._jittered(2.0, jitter))
                 else:  # 章节已完成
                     self.on_log(f'[ 已完成 ]    {course["location"]}')
             return True
@@ -166,7 +216,9 @@ class AccuracyTask:
             self.on_log("[!] 未找到任何指定小节(编号超出所选单元的小节范围)")
 
         return {'way1_succeed': way1_succeed, 'way1_failed': way1_failed,
-                'way2_succeed': way2_succeed, 'way2_failed': way2_failed}
+                'way2_succeed': way2_succeed, 'way2_failed': way2_failed,
+                'realtime': bool(realtime), 'seconds_per_chapter': round(answer_seconds, 1),
+                'qsec': qsec, 'qcount': qcount}
 
 
 def _printline():

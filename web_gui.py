@@ -304,6 +304,17 @@ def create_app():
         raw_realtime = payload.get("realtime", True)
         realtime = (raw_realtime if isinstance(raw_realtime, bool)
                     else str(raw_realtime).strip().lower() not in ("0", "false", "no", "off", ""))
+        raw_qsec = payload.get("qsec", welearn_accuracy.ANSWER_SECONDS_DEFAULT)
+        try:
+            qsec = float(raw_qsec)
+        except (TypeError, ValueError):
+            qsec = welearn_accuracy.ANSWER_SECONDS_DEFAULT
+        raw_qcount = payload.get("qcount", welearn_accuracy.QUESTION_COUNT_DEFAULT)
+        try:
+            qcount = int(float(raw_qcount))
+        except (TypeError, ValueError):
+            qcount = welearn_accuracy.QUESTION_COUNT_DEFAULT
+
         desc = "全部单元" if all_units else "单元" + ",".join(str(u) for u in unit_list)
         if section_map:
             desc += " 小节" + ",".join(
@@ -316,7 +327,9 @@ def create_app():
                                             section_map, jitter=jitter, realtime=realtime,
                                             shuffle=shuffle)
                 else:
-                    result = state.task.run(0 if all_units else unit_list, param, section_map)
+                    result = state.task.run(0 if all_units else unit_list, param, section_map,
+                                            jitter=jitter, realtime=realtime,
+                                            qsec=qsec, qcount=qcount)
             except Exception as e:
                 msg = repr(e)   # except 块结束会自动删除 e,先取值再使用
                 state._set(False, "待命")
@@ -336,10 +349,11 @@ def create_app():
             state.running = True
             state.running_what = "任务运行中"
             state.worker = threading.Thread(target=work, daemon=True)
+        pace = (f" 每题 {qsec:.0f} 秒 x {qcount} 题 ≈ {qsec * qcount / 60:.1f} 分钟/章"
+                if state.mode == "accuracy" else f" 乱序={'开' if shuffle else '关'}")
         state.log(f"开始任务:{desc} 参数={param}" +
-                  (f" 真实时间={'开' if realtime else '关'} 随机性={jitter:.0f}%"
-                   f" 乱序={'开' if shuffle else '关'}"
-                   if state.mode == "time" else ""))
+                  ((f" 真实时间={'开' if realtime else '关'} 随机性={jitter:.0f}%" + pace)
+                   if realtime else " 立即刷完"))
         state.worker.start()
         return jsonify(ok=True)
 
@@ -651,9 +665,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <div class="p-body">
         <div class="field"><span class="f-label" id="paramLabel">正确率(100 或 70,100):</span>
           <input type="text" id="param"></div>
-        <div class="field" id="realtimeField"><label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked>按真实时间刷(每章占满目标秒数;取消勾选=并发立即刷完)<span class="f-note" id="realtimeHint"></span></label></div>
+        <div class="field" id="realtimeField"><label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked>按真实节奏刷(时长=每章占满秒数;正确率=按「每题秒数 × 题量」铺开作答;取消勾选=立即刷完)<span class="f-note" id="realtimeHint"></span></label></div>
         <div class="field" id="jitterField"><span class="f-label">随机性 <b id="jitterVal">20%</b> (每章时长在 ±该比例内浮动,0 = 完全规律):</span>
           <input type="range" id="jitter" class="range" min="0" max="100" step="5" value="20"></div>
+        <div class="field" id="paceField"><span class="f-label">作答节奏(正确率模式):每题预估秒数 / 题量 —— 每章按两者乘积铺开,不会瞬间提交</span>
+          <div style="display:flex; gap:8px;">
+            <input type="number" id="qsec" min="1" max="600" step="1" value="25" title="每题预估秒数">
+            <input type="number" id="qcount" min="1" max="200" step="1" value="10" title="一份练习的题量">
+          </div></div>
         <div class="field" id="targetField"><label class="all-row" for="target">目标努力值(留空 = 只显示预计;填了就算还差多少)</label><input type="number" id="target" min="0" max="100000" step="10" placeholder="例如 900,留空则只显示预计"></div><div class="field" id="shuffleField"><label class="all-row" for="shuffle"><input type="checkbox" id="shuffle">乱序刷(打乱章节执行顺序,不按单元/小节从小到大)</label></div>
       </div>
     </section>
@@ -716,15 +735,18 @@ function setModeLabel() {
 
 /* 始终可见:只有「刷学习时长」模式可改,正确率模式下禁用并淡化,免得以为没有这项 */
 function updateJitterVisibility() {
-  var on = getMode() === 'time';
+  var isTime = getMode() === 'time';
   var rt = $('realtime').checked;
-  $('realtime').disabled = !on;
-  $('jitter').disabled = !on || !rt;
-  $('realtimeField').style.opacity = on ? '' : '0.55';
-  $('jitterField').style.opacity = (on && rt) ? '' : '0.55';
-  $('shuffle').disabled = !on;
-  $('shuffleField').style.opacity = on ? '' : '0.55';
-  $('realtimeHint').textContent = on ? '' : '  ← 切到「刷学习时长」才生效';
+  $('realtime').disabled = false;
+  $('jitter').disabled = !rt;
+  $('jitterField').style.opacity = rt ? '' : '0.55';
+  $('shuffle').disabled = !isTime;
+  $('shuffleField').style.opacity = isTime ? '' : '0.55';
+  $('paceField').style.display = isTime ? 'none' : '';
+  $('paceField').style.opacity = rt ? '' : '0.55';
+  $('qsec').disabled = !rt;
+  $('qcount').disabled = !rt;
+  $('realtimeHint').textContent = isTime ? '' : '  ← 正确率模式按「每题秒数 x 题量」铺开作答';
 }
 
 function selectMode(mode) {
@@ -1027,6 +1049,9 @@ function updateSummary() {
       : ' 立即刷完';
     if ($('shuffle').checked) suffix += ' 乱序';
   if ($('target').value.trim()) suffix += ' 目标 ' + $('target').value.trim() + ' 点';
+  }
+  if (getMode() !== 'time' && $('realtime').checked) {
+    suffix += ' 每题 ' + ($('qsec').value || 25) + ' 秒 x ' + ($('qcount').value || 10) + ' 题';
   }
   if ($('allUnits').checked) {
     el.textContent = '全部单元' + suffix;
@@ -1365,6 +1390,8 @@ $('probeBtn').addEventListener('click', function () {
 });
 
 $('target').addEventListener('input', updateSummary);
+$('qsec').addEventListener('input', updateSummary);
+$('qcount').addEventListener('input', updateSummary);
 
 $('startBtn').addEventListener('click', function () {
   var sel = buildSelection();
@@ -1377,7 +1404,9 @@ $('startBtn').addEventListener('click', function () {
               param: $('param').value,
               jitter: Number($('jitter').value),
               realtime: $('realtime').checked,
-              shuffle: $('shuffle').checked};
+              shuffle: $('shuffle').checked,
+              qsec: Number($('qsec').value) || 25,
+              qcount: Number($('qcount').value) || 10};
   apiPost('/api/start', body)
     .then(function (j) {
       if (!j.ok) { alert(j.error); return; }
