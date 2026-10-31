@@ -1,6 +1,7 @@
 import asyncio
 import json
 import random
+import re
 import threading
 import time
 from textwrap import dedent
@@ -195,6 +196,60 @@ class TimeTask:
                 'seconds': total_learning_time, 'jitter': jitter, 'realtime': realtime,
                 'shuffle': shuffle}
 
+    @staticmethod
+    def _duration_seconds(value: Any) -> int:
+        """把服务端返回的 SCORM 时长(纯秒 / HH:MM:SS / ISO8601 PT#H#M#S)解析成秒。"""
+        text = str(value or "").strip()
+        if not text:
+            return 0
+        if text.isdigit():
+            return int(text)
+        if ":" in text:
+            total = 0
+            for part in text.split(":"):
+                try:
+                    total = total * 60 + int(float(part or 0))
+                except ValueError:
+                    return 0
+            return total
+        match = re.search(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?",
+                          text.upper())
+        if not match:
+            return 0
+        days, hours, minutes, seconds = match.groups()
+        return (int(days or 0) * 86400 + int(hours or 0) * 3600
+                + int(minutes or 0) * 60 + int(float(seconds or 0)))
+
+    @staticmethod
+    def _format_duration(seconds: int, template: Any) -> str:
+        """按服务端原来那套写法把秒数写回去,避免格式不符被判定学习数据不正确。"""
+        total = max(0, int(seconds))
+        hours, rest = divmod(total, 3600)
+        minutes, secs = divmod(rest, 60)
+        text = str(template or "").strip()
+        if "P" in text.upper():
+            if total <= 0:
+                return "PT0S"
+            out = "PT"
+            if hours:
+                out += f"{hours}H"
+            if minutes:
+                out += f"{minutes}M"
+            out += f"{secs}S"
+            return out
+        if text.isdigit():
+            return str(total)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    def _elapsed_durations(self, opened: Dict[str, Any], elapsed: float) -> Tuple[str, str]:
+        """把本章已过秒数叠到打开章节时服务端给的基准上。"""
+        seconds = max(0, int(round(elapsed)))
+        base_session = self._duration_seconds(opened.get("session_time"))
+        base_total = self._duration_seconds(opened.get("total_time"))
+        session_time = self._format_duration(base_session + seconds, opened.get("session_time"))
+        total_time = self._format_duration(base_total + seconds, opened.get("total_time"))
+        return session_time, total_time
+
     async def _open_chapter(self, chapter: Dict, jitter: float,
                             errors: List[str]) -> Optional[Dict[str, Any]]:
         """请求 getscoinfo_v7(必要时重试一次),返回续期与保存所需的会话数据"""
@@ -216,7 +271,10 @@ class TimeTask:
                 errors.append(chapter['location'])
                 return None
 
-        return_json = response.json()['comment']
+        try:
+            return_json = response.json()['comment']
+        except (ValueError, KeyError, TypeError):
+            return_json = ''
         if 'cmi' in return_json:
             cmi = json.loads(return_json)['cmi']
             crate = cmi['score']['scaled']
@@ -283,12 +341,16 @@ class TimeTask:
             await asyncio.sleep(min(HEARTBEAT_INTERVAL, deadline - now))
             if time.monotonic() - start >= next_keepalive:
                 next_keepalive += self._keepalive_step(jitter)
+                elapsed = time.monotonic() - start
+                session_time, total_time = self._elapsed_durations(opened, elapsed)
+                self.on_log(f"   已学习 {int(elapsed)} 秒,上报 session={session_time} "
+                            f"total={total_time}(每约 {KEEPALIVE_INTERVAL} 秒记一次)")
                 self.session.post(
                     AJAX_URL,
                     data={**opened['data'], 'action': 'keepsco_with_getticket_with_updatecmitime',
-                          'session_time': opened['session_time'],
-                          'total_time': opened['total_time']},
+                          'session_time': session_time, 'total_time': total_time},
                     headers=opened['headers'])
+                self._save_chapter(opened)
 
         await asyncio.sleep(self._spread(self.request_interval, jitter))
         self._save_chapter(opened)
