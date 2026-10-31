@@ -609,8 +609,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .btn-stop:hover:not(:disabled) { background: #241A1A; border-color: #9C5B5B; }
 
   /* 单元/小节树 */
-  .all-row { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; margin-bottom: 8px;
-             border-bottom: 1px dashed var(--line-soft); font-size: 13px; color: var(--ink-2);
+  .p-sub { padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
+.p-sub:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
+.p-sub-title { font-size: 12px; font-weight: 700; color: var(--ink-2); letter-spacing: .3px; margin-bottom: 6px; display: flex; align-items: baseline; gap: 6px; }
+.p-sub-goal { background: #F4F8FE; border: 1px solid #DCE6F5; border-radius: 8px; padding: 10px; margin-left: -4px; margin-right: -4px; }
+.p-sub-goal .p-sub-title { margin-bottom: 8px; }
+.btn-go { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn-go:hover:not(:disabled) { background: #2F5C8A; border-color: #2F5C8A; color: #fff; }
+.all-row { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; margin-bottom: 8px;
+             padding: 2px 0; margin-bottom: 4px; font-size: 13px; color: var(--ink-2);
              cursor: pointer; }
   #unitTree { max-height: 430px; overflow-y: auto; border: 1px solid var(--line-soft);
               border-radius: 6px; padding: 6px; }
@@ -621,7 +628,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   .u-no { flex: none; font: 600 11px var(--mono); color: var(--ink-3); letter-spacing: .3px; }
   .u-name { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
   .sec-all-btn { flex: none; margin-left: auto; height: 22px; padding: 0 9px; border-radius: 5px;
-                 border: 1px dashed var(--line-soft); background: transparent; color: var(--ink-3);
+                 border: 1px solid var(--line-soft); background: #fff; color: var(--ink-3);
                  font-weight: 600; font-size: 11px; line-height: 1; font-family: inherit; cursor: pointer; }
   .sec-all-btn:hover { color: var(--blue); border-color: var(--blue); }
   .sec-all-btn:disabled { opacity: .5; cursor: default; }
@@ -737,18 +744,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <section class="panel">
       <div class="p-head"><span class="p-step">4</span><span class="p-title">任务参数</span></div>
       <div class="p-body">
-        <div class="field"><span class="f-label" id="paramLabel">正确率(100 或 70,100):</span>
-          <input type="text" id="param"></div>
-        <div class="field" id="realtimeField"><label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked>按真实节奏刷(时长=每章占满秒数;正确率=按「每题秒数 × 题量」铺开作答;取消勾选=立即刷完)<span class="f-note" id="realtimeHint"></span></label></div>
-        <div class="field" id="jitterField"><span class="f-label">随机性 <b id="jitterVal">20%</b> (每章时长在 ±该比例内浮动,0 = 完全规律):</span>
-          <input type="range" id="jitter" class="range" min="0" max="100" step="5" value="20"></div>
-        <div class="field" id="paceField"><span class="f-label">作答节奏(正确率模式):每题预估秒数 / 题量 —— 每章按两者乘积铺开,不会瞬间提交</span>
-          <div style="display:flex; gap:8px;">
-            <input type="number" id="qsec" min="1" max="600" step="1" value="25" title="每题预估秒数">
-            <input type="number" id="qcount" min="1" max="200" step="1" value="10" title="一份练习的题量">
-          </div></div>
-        <div class="field" id="targetField"><label class="all-row" for="target">目标努力值(留空 = 只显示预计;填了就算还差多少)</label><input type="number" id="target" min="0" max="100000" step="10" placeholder="例如 900,留空则只显示预计"></div><div class="field" id="shuffleField"><label class="all-row" for="shuffle"><input type="checkbox" id="shuffle">乱序刷(打乱章节执行顺序,不按单元/小节从小到大)</label></div>
-          <span class="f-note">填了分数就点下面蓝色「按目标刷」:每刷一章重新抓分,累计到目标自动停;只想看预计值就留空,点「抓分(只读)」</span>
+        <div class="p-sub">
+          <div class="field"><span class="f-label" id="paramLabel">正确率(100 或 70,100)</span>
+            <input type="text" id="param" placeholder="100"></div>
+          <div class="field" id="paceField"><span class="f-label">作答节奏(正确率模式)</span>
+            <div class="row-inline">
+              <input type="number" id="qsec" min="1" max="600" step="1" value="25" title="每题预估秒数" style="width:74px">
+              <span class="f-note">秒/题 ×</span>
+              <input type="number" id="qcount" min="1" max="200" step="1" value="10" title="一份练习的题量" style="width:74px">
+              <span class="f-note">题 ≈ 每章 <b id="paceTotalMin">4.2</b> 分钟(<span id="paceTotal">250</span> 秒)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="p-sub">
+          <div class="p-sub-title">节奏</div>
+          <label class="all-row" for="realtime"><input type="checkbox" id="realtime" checked><span>按真实节奏刷</span><span class="f-note" id="realtimeHint"></span></label>
+          <div class="field" id="jitterField"><span class="f-label">随机性 <b id="jitterVal">20%</b>(每章时长在 ±该比例内浮动,0 = 完全规律)</span>
+            <input type="range" id="jitter" class="range" min="0" max="100" step="5" value="20"></div>
+          <label class="all-row" for="shuffle"><input type="checkbox" id="shuffle"><span>乱序刷(打乱章节执行顺序)</span></label>
+        </div>
+
+        <div class="p-sub p-sub-goal">
+          <div class="p-sub-title">目标努力值 <span class="f-note">留空 = 只估算;填了就刷到达标为止</span></div>
+          <div class="row-inline">
+            <input type="number" id="target" min="0" max="100000" step="10" placeholder="填目标分数,例如 900" class="grow">
+            <button id="targetBtn" class="btn btn-go" type="button" title="按目标努力值一直刷到达标为止(每章后重新抓分)">按目标刷</button>
+            <button id="probeBtn" class="btn" type="button" title="只读抓取每章节已学时长与学习类努力值,不提交任何数据">抓分(只读)</button>
+          </div>
+          <span class="f-note">「按目标刷」= 每刷一章重新抓分,累计到目标自动停;只想看还差多少就点「抓分(只读)」</span>
+        </div>
       </div>
     </section>
   </div>
@@ -760,8 +785,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <span id="runSummary">未选择单元</span>
       </div>
       <div class="run-actions">
-        <button id="probeBtn" class="btn btn-lg" type="button" title="只读抓取每章节已学时长与学习类努力值,不提交任何数据" style="margin-right:8px;background:#eef2f7;color:#334155;box-shadow:none;">抓分(只读)</button>
-        <button id="targetBtn" class="btn btn-lg" type="button" title="按目标努力值一直刷到达标为止(每章后重新抓分)" style="margin-right:8px;background:#2563eb;color:#fff;box-shadow:none;">按目标刷</button>
         <button id="rulesBtn" class="btn btn-lg" type="button" title="显示努力值计分规则(来自 App 计分规则页)" style="margin-right:8px;background:#eef2f7;color:#334155;box-shadow:none;">计分规则</button>
         <button id="startBtn" class="btn btn-lg btn-run" disabled>开始任务</button>
         <button id="stopBtn" class="btn btn-lg btn-stop" disabled>停止</button>
@@ -1515,6 +1538,16 @@ $('targetBtn').addEventListener('click', function () {
     })
     .catch(function (err) { alert('请求失败:' + err); $('targetBtn').disabled = false; });
 });
+
+function updatePaceText() {
+  var s = Number($('qsec').value) || 25;
+  var n = Number($('qcount').value) || 10;
+  $('paceTotal').textContent = String(s * n);
+  $('paceTotalMin').textContent = (s * n / 60).toFixed(1);
+}
+$('qsec').addEventListener('input', updatePaceText);
+$('qcount').addEventListener('input', updatePaceText);
+updatePaceText();
 
 $('target').addEventListener('input', updateSummary);
 $('qsec').addEventListener('input', updateSummary);

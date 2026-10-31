@@ -17,15 +17,16 @@ def _module_source() -> str:
 
 def test_shuffle_checkbox_exists():
     body = _page()
-    assert 'id="shuffleField"' in body
     assert '<input type="checkbox" id="shuffle">' in body
-    assert '乱序刷(打乱章节执行顺序,不按单元/小节从小到大)' in body
+    assert '乱序刷(打乱章节执行顺序)' in body
+    assert '<div class="p-sub-title">节奏</div>' in body
 
 
 def test_shuffle_participates_in_visibility():
     body = _page()
-    assert "$('shuffle').disabled = !on;" in body
-    assert "$('shuffleField').style.opacity = on ? '' : '0.55';" in body
+    assert "$('shuffle').disabled = !isTime;" in body
+    assert "$('shuffle').disabled = !isTime;" in body
+    assert "$('paceField').style.display = isTime ? 'none' : '';" in body
 
 
 def test_shuffle_submitted_and_shown():

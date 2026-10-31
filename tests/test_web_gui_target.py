@@ -62,7 +62,9 @@ UNITS = {
 
 def test_page_has_target_field():
     html = web_gui.app.test_client().get("/").get_data(as_text=True)
-    assert 'id="targetField"' in html
+    assert 'id="target"' in html
+    assert '目标努力值' in html
+    assert '按目标刷' in html
     assert 'id="target"' in html
     assert "目标努力值" in html
 
