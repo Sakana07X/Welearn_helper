@@ -41,8 +41,9 @@ class FakeTask:
         return [{"location": "U1 > A", "iscomplete": "completed", "isvisible": "true"},
                 {"location": "U1 > B", "iscomplete": "未完成", "isvisible": "false"}]
 
-    def run(self, units, param, sections=None):
+    def run(self, units, param, sections=None, **kwargs):
         self.last_run_args = (units, param, sections)
+        self.last_run_kwargs = kwargs
         time.sleep(0.2)   # 让"任务运行中"状态可被观测,避免与断言竞态
         self.on_log(f"fake run units={units} param={param} sections={sections}")
         return {"way1_succeed": 1, "way1_failed": 0,
